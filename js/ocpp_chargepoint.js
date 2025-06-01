@@ -467,7 +467,7 @@ export default class ChargePoint {
                         self.setStatus(ocpp.CP_ERROR,'ws normal error: ' + evt.type)
                         break;
                     case 3: // CLOSED
-                        setTimeout(() => self.wsConnect(wsurl, cpid), 5000); // Reconnect after 5 seconds
+                        setTimeout(() => self.wsConnect(wsurl, cpid), 1000);
                         self.setStatus(ocpp.CP_ERROR,'connection cannot be opened: ' + evt.type)
                         break;
                     default:
