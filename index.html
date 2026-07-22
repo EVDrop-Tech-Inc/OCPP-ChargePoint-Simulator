@@ -20,23 +20,43 @@
         <nav class="navbar navbar-expand-md navbar-dark bg-dark fixed-top">
             <a class="navbar-brand" href="#">OCPP ChargePoint Simulator</a>
         </nav>
-        <main role="main" class="container">
+ 
+        <div id="setup_screen" class="container"style="margin-top: 50px; max-width: 1000px;">
             <ul class="nav nav-tabs">
                 <li class="nav-item">
-                    <a class="nav-link active" href="#tabcpsim" data-toggle="tab">ChargePoint</a>
+                    <a class="nav-link active" href="#tabcppin" data-toggle="tab">PIN</a>
                 </li>
-                <li class="nav-item">
-                    <a class="nav-link" href="#tabcon1" data-toggle="tab">Connector 1</a>
-                </li>
-                <li class="nav-item">
-                    <a class="nav-link" href="#tabcon2" data-toggle="tab">Connector 2</a>
-                </li>
+
                 <li class="nav-item">
                     <a class="nav-link" href="#tabcpparams" data-toggle="tab">Settings</a>
                 </li>
             </ul>
 
             <div class="tab-content">
+                <div class="tab-pane show active mt-4" id="tabcppin">
+                    <form id="cppin">
+                        <div style="max-width: 500px;">
+                            <h3 class="mb-4">Enter PIN</h3>
+
+                            <div class="form-group">
+                                <input
+                                    type="password"
+                                    class="form-control"
+                                    id="PIN"
+                                    name="PIN"
+                                    placeholder="PIN"
+                                >
+                                <small id="pin_error" class="form-text text-danger" style="display:none;">
+                                    Invalid PIN
+                                </small>
+                            </div>
+                            <button id="pin_submit" type="button" class="btn btn-primary btn-block">
+                                Submit PIN
+                            </button>
+                        </div>
+                    </form>
+                </div>
+
                 <div class="tab-pane mt-4" id="tabcpparams">
                     <form id="cpparams">
                         <div class="form-group">
@@ -44,101 +64,213 @@
                             <input type="text" class="form-control" id="WSURL" name="WSURL" aria-describedby="urlHelp" placeholder="ws://localhost:8080/steve/websocket/CentralSystemService/">
                             <small id="urlHelp" class="form-text text-muted">The base URL of the OCPP Server (without the ChargePoint ID)</small>
                         </div>
+
                         <div class="form-group">
                             <label for="CPID">ChargePoint ID</label>
-                            <input type="text" class="form-control" id="CPID" name="CPID" placeholder="CP001" style="max-width: 20ch">
+                            <input type="text" class="form-control" id="CPID" name="CPID" placeholder="CP001" style="max-width: 25ch">
                         </div>
+
                         <div class="form-group">
                             <label for="OCPP">OCPP Version</label>
                             <select id="OCPP" class="form-control" style="max-width: 20ch"><option value="">OCPP-1.6J</option></select>
                         </div>
+
                         <div class="form-group">
                             <label for="TAG">RFID Tag</label>
                             <input type="text" class="form-control" id="TAG" name="TAG" aria-describedby="TAGHelp" placeholder="DEADBEEF" style="max-width: 20ch">
                             <small id="TAGHelp" class="form-text text-muted">The ID of the simulated RFID tag</small>
                         </div>
+
                         <button type="submit" class="btn btn-primary">Save</button>
-                    </form>    
-                </div>
-                <div class="tab-pane mt-4" id="tabcon1">
-                    <form id="con1">
-                        <div class="form-group">
-                            <label for="AVAILABILITY_CON1">Connector Availability:</label>
-                            <select id="AVAILABILITY_CON1" class="form-control" style="max-width: 16ch; margin-right:1ch;">
-                                <option selected value="Operative">Operative</option>
-                                <option disabled value="Inoperative">Inoperative</option>
-                            </select>
-                        </div>
-                        <div class="form-group">
-                            <label for="STATUS_CON1">Connector Status:</label>
-                            <div class="d-flex">
-                                <select id="STATUS_CON1" class="form-control" style="max-width: 16ch; margin-right:1ch;">
-                                    <option value="Available">Available</option>
-                                    <option value="Preparing">Preparing</option>
-                                    <option value="Charging">Charging</option>
-                                    <option value="SuspendedEV">Suspended EV</option>
-                                    <option value="SuspendedEVSE">Suspended EVSE</option>
-                                    <option value="Finishing">Finishing</option>
-                                    <option value="Reserved">Reserved</option>
-                                    <option value="Unavailable">Unavailable</option>
-                                    <option value="Faulted">Faulted</option>
-                                </select>
-                                <button id="status1" type="button" class="btn btn-primary">Status Notification</button>
-                            </div>
-                        </div>
                     </form>
-                </div>
-                <div class="tab-pane mt-4" id="tabcon2">
-                    <p>I am not yet available...</p>
-                </div>
-                <div class="tab-pane active" id="tabcpsim">
-                    <div class="row mt-4">
-                        <div class="col-sm-4">
-                            <button id="connect" type="button" class="btn btn-primary btn-block">Connect</button>
-                            <button id="disconnect" type="button" class="btn btn-secondary btn-block ">Disconnect</button>
-                            <button id="send" type="button" class="btn btn-primary btn-block">Authorize</button>
-                            <button id="start" type="button" class="btn btn-primary btn-block">Start Transaction</button>
-                            <button id="stop" type="button" class="btn btn-primary btn-block">Stop Transaction</button>
-                            <button id="heartbeat" type="button" class="btn btn-primary btn-block">Heartbeat</button>
-                            <button id="data_transfer" type="button" class="btn btn-primary btn-block">Data Transfer</button>
+                </div> 
+            </div>
+        </div>
+        
+        <div id="mode_screen" class="container" style="display:none; margin-top: 50px; max-width: 1000px;">
+            <h3 class="mb-2">Choose Simulation Mode</h3>
+
+            <div class="row">
+                <div class="col-md-6 mb-3">
+                    <div class="card h-100">
+                        <div class="card-body">
+                            <h4> Manual Simulation </h4>
+                            <p class="text-muted">
+                                Control simulator manually. Best for testing individual OCPP messages.
+                            </p>
+
+                            <button id="mode_manual" type="button" class="btn btn-primary btn-block">
+                                Start Manual Simulation
+                            </button>
                         </div>
-                        <div class="col-sm-8 d-flex">                    
-                            <div class="card w-100">
-                                <div class="card-body">
-                                    <p><label>Server Status:</label>
-                                        <span id="badge_available" class="indicator badge badge-success">Authorized</span>
-                                        <span id="badge_connected" class="indicator badge badge-warning">Connected</span>
-                                        <span id="badge_connecting" class="indicator badge badge-secondary">Connecting</span>
-                                        <span id="badge_disconnected" class="indicator badge badge-light">Disconnected</span>
-                                        <span id="badge_error" class="indicator badge badge-danger">Error</span>
-                                        <span id="badge_transaction" class="indicator badge badge-primary">In Transaction</span></p>  
-                                    <div class="form-group">
-                                        <label for="AVAILABILITY_CON0">Charge Point Availability:</label>
-                                        <select id="AVAILABILITY_CON0" class="form-control" style="max-width: 16ch; margin-right:1ch;">
-                                            <option selected value="Operative">Operative</option>
-                                            <option disabled value="Inoperative">Inoperative</option>
-                                        </select>
-                                    </div>
-                                    <div class="form-group">
-                                        <label for="STATUS_CON0">Charge Point Status:</label>
-                                        <div class="d-flex">
-                                            <select id="STATUS_CON0" class="form-control" style="max-width: 16ch; margin-right:1ch;">
-                                                <option value="Available">Available</option>
-                                                <option value="Unavailable">Unavailable</option>
-                                                <option value="Faulted">Faulted</option>
-                                            </select>
-                                            <button id="status0" type="button" class="btn btn-primary">Status Notification</button>
-                                        </div>
-                                    </div>
-                                    <div class="form-group">
-                                        <label for="metervalue">Meter value: </label>
-                                        <div class="d-flex">
-                                            <input type="text" id="metervalue" type="text" name="mv" value="1" style="max-width: 12ch">
-                                            <div class="input-group-btn">
-                                                <button id="mvplus" class="btn btn-secondary"><span class="fa fa-plus"></span></button>
-                                                <button id="mv" type="button" class="btn btn-primary" style="margin-left: 1ch">Send Meter Value</button>
+                    </div>
+                </div>
+
+                <div class="col-md-6 mb-3">
+                    <div class="card h-100">
+                        <div class="card-body">
+                            <h4> Automated Simulation </h4>
+                            <p class="text-muted">
+                                Connects the simulator and waits for backend activation. Once activated, it sends meter values automatically until stopped.
+                            </p>
+
+                            <div class="form-group">
+                                <label for="auto_meter_interval">Meter Value Interval Seconds</label>
+                                <input
+                                    type="number"
+                                    class="form-control"
+                                    id="auto_meter_interval"
+                                    value="10"
+                                    min="0"
+                                    style="max-width: 12ch;"
+                                >
+                            </div>
+
+                            <div class="form-group">
+                                <label for="auto_timer_minutes">Auto Stop Timer Minutes</label>
+                                <input
+                                    type="number"
+                                    class="form-control"
+                                    id="auto_timer_minutes"
+                                    value="2"
+                                    min="0"
+                                    style="max-width: 12ch;"
+                                >
+                            </div>
+
+                            <div class="form-group">
+                                <label for="auto_timer_seconds">Auto Stop Timer Seconds</label>
+                                <input
+                                    type="number"
+                                    class="form-control"
+                                    id="auto_timer_seconds"
+                                    value="0"
+                                    min="0"
+                                    max="59"
+                                    style="max-width: 12ch;"
+                                >
+                            </div>
+
+                            <button id="mode_automated" type="button" class="btn btn-primary btn-block">
+                                Start Automated Simulation
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div id="simulator_app" style="display: none;">
+            <main role="main" class="container">
+                <ul class="nav nav-tabs">
+                    <li class="nav-item">
+                        <a class="nav-link active" href="#tabcpsim" data-toggle="tab">ChargePoint</a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="#tabcon1" data-toggle="tab">Connector 1</a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="#tabcon2" data-toggle="tab">Connector 2</a>
+                    </li>
+                </ul>
+
+                <div class="tab-content">
+                    <div class="tab-pane mt-4" id="tabcon1">
+                        <form id="con1">
+                            <div class="form-group">
+                                <label for="AVAILABILITY_CON1">Connector Availability:</label>
+                                <select id="AVAILABILITY_CON1" class="form-control" style="max-width: 16ch; margin-right:1ch;">
+                                    <option selected value="Operative">Operative</option>
+                                    <option disabled value="Inoperative">Inoperative</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label for="STATUS_CON1">Connector Status:</label>
+                                <div class="d-flex">
+                                    <select id="STATUS_CON1" class="form-control" disabled style="max-width: 16ch; margin-right:1ch;">
+                                        <option value="Available">Available</option>
+                                        <option value="Preparing">Preparing</option>
+                                        <option value="Charging">Charging</option>
+                                        <option value="SuspendedEV">Suspended EV</option>
+                                        <option value="SuspendedEVSE">Suspended EVSE</option>
+                                        <option value="Finishing">Finishing</option>
+                                        <option value="Reserved">Reserved</option>
+                                        <option value="Unavailable">Unavailable</option>
+                                        <option value="Faulted">Faulted</option>
+                                    </select>
+                                    <button id="status1" type="button" class="btn btn-primary">Status Notification</button>
+                                </div>
+                            </div>
+                        </form>
+                    </div>
+                    <div class="tab-pane mt-4" id="tabcon2">
+                        <p>I am not yet available...</p>
+                    </div>
+
+                    <div class="tab-pane active" id="tabcpsim">
+                        <div class="row mt-4">
+                            <div class="col-sm-4">
+                                <!-- <button id="connect" type="button" class="btn btn-primary btn-block">Connect</button> -->
+                                <button id="disconnect" type="button" class="btn btn-secondary btn-block ">Disconnect</button>
+                                <!-- <button id="send" type="button" class="btn btn-primary btn-block">Authorize</button> -->
+                                <button id="start" type="button" class="btn btn-primary btn-block">Start Transaction</button>
+                                <button id="stop" type="button" class="btn btn-primary btn-block">Stop Transaction</button>
+                                <button id="heartbeat" type="button" class="btn btn-primary btn-block">Heartbeat</button>
+                                <button id="data_transfer" type="button" class="btn btn-primary btn-block">Data Transfer</button>
+                            </div>
+                            <div class="col-sm-8 d-flex">                    
+                                <div class="card w-100">
+                                    <div class="card-body">
+                                        <p><label>Server Status:</label>
+                                            <span id="badge_available" class="indicator badge badge-success">Authorized</span>
+                                            <span id="badge_connected" class="indicator badge badge-warning">Connected</span>
+                                            <span id="badge_connecting" class="indicator badge badge-secondary">Connecting</span>
+                                            <span id="badge_disconnected" class="indicator badge badge-light">Disconnected</span>
+                                            <span id="badge_error" class="indicator badge badge-danger">Error</span>
+                                            <span id="badge_transaction" class="indicator badge badge-primary">In Transaction</span></p>  
+                                        <div class="form-group">
+                                            <div class="d-flex align-items-center mb-2">
+                                                <label for="STATUS_CON0" class="mb-0 mr-2">
+                                                    Charge Point Status:
+                                                </label>
+                                                <span
+                                                    id="chargepoint_status_badge"
+                                                    class="badge badge-secondary"
+                                                    style="display:none;"
+                                                >
+                                                    Unknown
+                                                </span>
                                             </div>
 
+                                            <div id="manual_chargepoint_status_controls" class="d-flex">
+                                                <select id="STATUS_CON0" class="form-control" style="max-width: 16ch; margin-right:1ch;">
+                                                    <option value="Available">Available</option>
+                                                    <option value="Preparing">Preparing</option>
+                                                    <option value="Charging">Charging</option>
+                                                    <option value="Finishing">Finishing</option>
+                                                    <option value="Unavailable">Unavailable</option>
+                                                    <option value="Faulted">Faulted</option>
+                                                </select>
+                                                <button id="status0" type="button" class="btn btn-primary">
+                                                    Status Notification
+                                                </button>
+                                            </div>
+                                        </div>
+                                        <div class="form-group">
+                                            <label for="metervalue">Meter value: </label>
+                                            <div class="d-flex">
+                                                <input type="text" id="metervalue" type="text" name="mv" value="1" style="max-width: 12ch">
+                                                <div class="input-group-btn">
+                                                    <button id="mvplus" class="btn btn-secondary"><span class="fa fa-plus"></span></button>
+                                                    <button id="mv" type="button" class="btn btn-primary" style="margin-left: 1ch">
+                                                        Send Meter Value
+                                                    </button>
+
+                                                    <button id="reset_meter" type="button" class="btn btn-outline-secondary" style="margin-left: 1ch;">
+                                                        Reset Meter
+                                                    </button>
+                                                </div>
+                                            </div>
                                         </div>
                                     </div>
                                 </div>
@@ -146,18 +278,22 @@
                         </div>
                     </div>
                 </div>
-            </div>
+            </main>
+        </div>
+
+        <div id="log_screen" class="container" style="max-width: 1000px;">
             <div class="row mt-4 mr-1 ml-1 d-flex">
                 <div class="col-sm-12 pr-0 pl-0">
                     <form>
                         <div class="form-group">
-                            <label for="console">Log: </label>
+                            <label for="console">Log:</label>
                             <textarea readonly class="form-control form-control-sm border-0 bg-light text-secondary" id="console" rows="10" name="console"></textarea>
                         </div>
                     </form>
                 </div>
             </div>
-        </main>
+        </div>
+
         <script type="module" src="./js/ocpp_constants.js"></script>
         <script type="module" src="./js/ocpp_chargepoint.js"></script>
         <script type="module" src="./js/main.js"></script>

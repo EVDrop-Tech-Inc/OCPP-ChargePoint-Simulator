@@ -77,7 +77,7 @@ function setKey(key,value) {
 }
 
 //
-// Get a key value from session storage
+// Get a key value from local storage
 // @param key The key name
 // @return The key value
 //
@@ -98,7 +98,9 @@ export default class ChargePoint {
     
     //
     // Constructor
-    // @param a callback function that will receive debug logging information
+    // 
+    // Initializes the charge point state, WebSocket connection, heartbeat timer,
+    // and callback placeholders used by main.js.
     //
     constructor() {
         this._websocket            = null;
@@ -126,7 +128,7 @@ export default class ChargePoint {
     }
     
     //
-    // Set the logging callback, this will be triggered when the OCPP server triggers a SetAvailability message
+    // Set the availability callback, this will be triggered when the OCPP server triggers a SetAvailability message
     // @param A callback function which takes two arguments (int + string): (connectorId,"new availability")
     //
     setAvailabilityChangeCallback(cb) {
@@ -144,7 +146,7 @@ export default class ChargePoint {
     }
 
     //
-    // Set the internal status of the CP and call the status update callbalck if any
+    // Set the internal status of the CP and call the status update callback if any
     // @param s The new status value
     // @param msg Optional message (for information purpose)
     //
@@ -156,10 +158,267 @@ export default class ChargePoint {
     }
     
     //
+    // Get reservations from local storage
+    // @return The reservations list (as JSON object array), or an empty array if no reservation(s), or in case of error.
+    //
+    getReservations() {
+        const raw = getKey(ocpp.KEY_RESERVATIONS, "[]");
+
+        try {
+            const parsed = JSON.parse(raw);
+
+            if (!Array.isArray(parsed)) {
+                console.warn("Stored reservation data was invalid; resetting");
+                setKey(ocpp.KEY_RESERVATIONS, "[]");
+                return [];
+            }
+
+            return parsed;
+        } catch {
+            console.warn("Could not read stored reservations; resetting");
+            setKey(ocpp.KEY_RESERVATIONS, "[]");
+            return [];
+        }
+    }
+
+    //
+    // Set reservations in local storage
+    // @param reservations The reservations list (as JSON object array)
+    //
+    setReservations(reservations) {
+        if (!Array.isArray(reservations)) {
+            console.warn("Reservations must be an array");
+            return;
+        }
+
+        setKey(ocpp.KEY_RESERVATIONS, JSON.stringify(reservations));
+    }
+
+    //
+    // Check if a reservation is expired
+    // @param reservation The reservation to check
+    // @param nowMs The current timestamp in milliseconds
+    // @return true if the reservation is expired, false otherwise
+    //
+    isReservationExpired(reservation, nowMs) {
+        const expiry = reservation.expiryDate
+            ? new Date(reservation.expiryDate)
+            : null;
+
+        return (
+            !expiry || Number.isNaN(expiry.getTime()) || expiry.getTime() <= nowMs
+        );
+    }
+
+    //
+    // Release a reserved connector
+    // @param connectorId The connector id to release
+    //
+    releaseReservedConnector(connectorId) {
+        if (this.connectorStatus(connectorId) === ocpp.CONN_RESERVED) {
+            this.setConnectorStatus(connectorId, ocpp.CONN_AVAILABLE, true);
+        }
+    }
+
+    //
+    // Purge expired reservations from local storage and free their connectors
+    //
+    purgeExpiredReservations() {
+        const nowMs = Date.now();
+        const activeReservations = [];
+        const expiredConnectorIds = new Set();
+        const reservations = this.getReservations();
+        let hasExpiredReservations = false;
+
+        // If there are no reservations, do nothing
+        if (reservations.length === 0) {
+            return;
+        }
+
+        // Iterate over all reservations and check if they are expired
+        for (const reservation of reservations) {
+            const connectorId = Number(reservation.connectorId);
+
+            if (this.isReservationExpired(reservation, nowMs)) {
+                hasExpiredReservations = true;
+
+                // connectorId 0 represents a charge point-level reservation, which is not implemented yet.
+                if (Number.isInteger(connectorId) && connectorId > 0) {
+                    expiredConnectorIds.add(connectorId);
+                } else {
+                    console.warn(
+                        `Found expired reservation with invalid or unsupported connectorId ${reservation.connectorId}, reservation id ${reservation.reservationId}. Reservation has been cleared, but connector status has not been updated.`
+                    );
+                }
+            } else {
+                activeReservations.push(reservation);
+            }
+        }
+
+        // If nothing has expired, do nothing
+        if (!hasExpiredReservations) {
+            return;
+        }
+
+        // Remove expired reservations
+        this.setReservations(activeReservations);
+
+        // Release reserved connectors for valid, specific connector reservations
+        for (const connectorId of expiredConnectorIds) {
+            this.releaseReservedConnector(connectorId);
+        }
+    }
+
+    //
+    // Store or replace a reservation in local storage
+    // @param reservation The reservation to store or replace (as JSON object)
+    // @return status string
+    //
+    storeOrReplaceReservation(reservation) {
+        // Purge expired reservations before storing the new one
+        this.purgeExpiredReservations();
+
+        const connectorId = Number(reservation.connectorId);
+
+        // Connector 0 represents a charge point-level reservation in OCPP 1.6J.
+        // This simulator currently supports only connector-level reservations.
+        if (!Number.isInteger(connectorId) || connectorId < 1) {
+            return ocpp.RESERVATION_STATUS_REJECTED;
+        }
+
+        const reservations = this.getReservations();
+
+        // Check if a reservation already exists for the same reservationId
+        const sameIdReservation = reservations.find(function (r) {
+            return r.reservationId === reservation.reservationId;
+        });
+
+        // Create a new list of reservations without the same reservationId
+        const reservationsWithoutSameId = reservations.filter(function (r) {
+            return r.reservationId !== reservation.reservationId;
+        });
+
+        // Check if a reservation already exists for the same connector but different reservationId
+        const connectorReservation = reservationsWithoutSameId.find(function (r) {
+            return Number(r.connectorId) === connectorId;
+        });
+
+        // If a reservation already exists for the same connector but different reservationId, return OCCUPIED
+        if (connectorReservation) {
+            return ocpp.RESERVATION_STATUS_OCCUPIED;
+        }
+
+        // Store the new reservation in the list
+        reservationsWithoutSameId.push(reservation);
+        this.setReservations(reservationsWithoutSameId);
+
+        // If a reservation already exists for the same id but on a different connector, release the old connector
+        if (
+            sameIdReservation &&
+            Number(sameIdReservation.connectorId) !== connectorId
+        ) {
+            this.releaseReservedConnector(Number(sameIdReservation.connectorId));
+        }
+
+        // Set the connector as reserved, and update server with a StatusNotification
+        this.setConnectorStatus(connectorId, ocpp.CONN_RESERVED, true);
+
+        return ocpp.RESERVATION_STATUS_ACCEPTED;
+    }
+
+    //
+    // Remove a reservation from local storage
+    // @param reservationId The id of the reservation to remove
+    // @return The removed reservation or null if not found
+    //
+    removeReservation(reservationId) {
+        const reservations = this.getReservations();
+
+        // Find the reservation to remove
+        const removedReservation = reservations.find(function (r) {
+            return r.reservationId === reservationId;
+        });
+
+        // If the reservation is not found, return null
+        if (!removedReservation) {
+            console.warn(`No reservation found with id ${reservationId}`);
+            return null;
+        }
+
+        // Remove the reservation from local storage
+        this.setReservations(
+            reservations.filter(function (r) {
+                return r.reservationId !== reservationId;
+            })
+        );
+
+        // Return the removed reservation
+        return removedReservation;
+    }
+
+    //
+    // Cancel a reservation
+    // @param reservationId The id of the reservation to cancel
+    // @return true if the reservation was cancelled, false otherwise
+    //
+    cancelReservation(reservationId) {
+        const removedReservation = this.removeReservation(reservationId);
+
+        // If the reservation is not found, return false
+        if (!removedReservation) {
+            return false;
+        }
+
+        // Release the connector
+        this.releaseReservedConnector(removedReservation.connectorId);
+
+        return true;
+    }
+
+    //
+    // Find a reservation matching a connectorId
+    // @param connectorId The connector id to match
+    // @return The matching reservation or null if not found
+    //
+    findReservationByConnectorId(connectorId) {
+        // Purge expired reservations before searching for a match
+        this.purgeExpiredReservations();
+
+        const reservations = this.getReservations();
+
+        // Find the reservation matching the connectorId
+        return (
+            reservations.find(function (r) {
+                return Number(r.connectorId) === Number(connectorId);
+            }) || null
+        );
+    }
+
+    //
+    // Check if a transaction can start on a connector according to active reservations
+    // @param tagId The idTag requesting the transaction
+    // @param connectorId The connector id to check
+    // @return { accepted: boolean, reservation: object|null }
+    //
+    checkStartTransactionReservation(tagId, connectorId) {
+        const reservation = this.findReservationByConnectorId(connectorId);
+
+        if (!reservation) {
+        return { accepted: true, reservation: null };
+        }
+
+        if (reservation.idTag !== tagId) {
+        return { accepted: false, reservation };
+        }
+
+        return { accepted: true, reservation };
+    }
+
+    //
     // Handle a command coming from the OCPP server
     //
     handleCallRequest(id,request,payload) {
-        var respOk = JSON.stringify([3,id,{"status": "Accepted"}]);
+        var respOk = JSON.stringify([ocpp.CALLRESULT,id,{"status": "Accepted"}]);
         var connectorId=0;
         switch (request) {
             case "Reset":
@@ -172,11 +431,40 @@ export default class ChargePoint {
 
             case "RemoteStartTransaction":
                 console.log("RemoteStartTransaction");
-                //Need to get idTag, connectorId (map - ddata[3])
-                var tagId = payload.idTag;
-                this.logMsg("Reception of a RemoteStartTransaction request for tag "+tagId);
-                this.wsSendData(respOk);
-                this.startTransaction(tagId);
+
+                const tagId = payload.idTag;
+                const connectorId = payload.connectorId != null ? payload.connectorId : 1;
+
+                this.logMsg("Reception of a RemoteStartTransaction request for tag "+tagId+" (connector "+connectorId+")");
+
+                const { accepted, reservation } = this.checkStartTransactionReservation(
+                    tagId,
+                    connectorId,
+                );
+
+                if (!accepted) {
+                    this.logMsg(
+                        `RemoteStartTransaction rejected for tag ${tagId} on connector ${connectorId} due to existing reservation for another tag (reservation id ${reservation.reservationId})`,
+                    );
+
+                    const response = JSON.stringify([
+                        ocpp.CALLRESULT,
+                        id,
+                        { status: "Rejected" },
+                    ]);
+
+                    this.wsSendData(response);
+                    break;
+                }
+
+                const response = JSON.stringify([
+                    ocpp.CALLRESULT,
+                    id,
+                    { status: "Accepted" },
+                ]);
+
+                this.wsSendData(response);
+                this.startTransaction(tagId, connectorId, reservation?.reservationId ?? 0);
                 break;
 
             case "RemoteStopTransaction":
@@ -213,8 +501,65 @@ export default class ChargePoint {
                 //logMsg("Connector status changed to: "+connector_locked);
                 break;
 
+            case "ReserveNow": {
+                // Handles OCPP 1.6J ReserveNow for connector-level reservations.
+                // Current support: connectorId > 0, expiry cleanup, replacement by reservationId,
+                // and Occupied when another active reservation already exists for the connector.
+                // Not yet supported: connectorId 0 charge point-level reservations, parentIdTag
+                // matching, Faulted/Unavailable status responses, and reservation config keys.
+                const reservation = {
+                    connectorId: payload.connectorId,
+                    expiryDate: payload.expiryDate,
+                    idTag: payload.idTag,
+                    reservationId: payload.reservationId,
+                    parentIdTag: payload.parentIdTag ?? null,
+                };
+
+                const status = this.storeOrReplaceReservation(reservation);
+
+                const parentIdTagText =
+                    reservation.parentIdTag != null
+                        ? `, parentIdTag ${reservation.parentIdTag}`
+                        : "";
+
+                this.logMsg(
+                    `Received reservation request (connector ${reservation.connectorId}, expiryDate ${reservation.expiryDate}, idTag ${reservation.idTag}, reservationId ${reservation.reservationId}${parentIdTagText})`
+                );
+
+                let response = JSON.stringify([
+                    ocpp.CALLRESULT,
+                    id,
+                    { status: status },
+                ]);
+
+                this.wsSendData(response);
+                break;
+            }
+
+            case "CancelReservation": {
+                const reservationId = payload.reservationId;
+                const cancelled = this.cancelReservation(reservationId);
+
+                this.logMsg(
+                    `Received cancel reservation request (reservationId ${reservationId})`
+                );
+
+                let response = JSON.stringify([
+                    ocpp.CALLRESULT,
+                    id,
+                    {
+                        status: cancelled
+                            ? ocpp.RESERVATION_STATUS_ACCEPTED
+                            : ocpp.RESERVATION_STATUS_REJECTED,
+                    },
+                ]);
+
+                this.wsSendData(response);
+                break;
+            }
+
             default:
-                var error = JSON.stringify([4,id,"NotImplemented"]);
+                var error = JSON.stringify([ocpp.CALLERROR,id,"NotImplemented"]);
                 this.wsSendData(error);
                 break;
         }
@@ -272,7 +617,7 @@ export default class ChargePoint {
         this.setLastAction("Authorize");
         this.logMsg("Requesting authorization for tag " + tagId);
         var id=generateId();
-        var Auth = JSON.stringify([2,id,"Authorize", {
+        var Auth = JSON.stringify([ocpp.CALL,id,"Authorize", {
             "idTag": tagId
         }]);
         this.wsSendData(Auth);
@@ -281,22 +626,50 @@ export default class ChargePoint {
     //
     // Send a StartTransaction call to the OCPP Server
     // @param tagId the id of the RFID tag currently authorized on the CP
+    // @param
+    // @param
     //
-    startTransaction(tagId,connectorId=1,reservationId=0){
+    startTransaction(tagId, connectorId=1, reservationId=0){
+        // Reserved connectors only allow StartTransaction for the reservation's idTag.
+        // parentIdTag matching is part of OCPP 1.6J but is not implemented yet.
+        const { accepted, reservation } = this.checkStartTransactionReservation(
+            tagId,
+            connectorId
+        );
+
+        if (!accepted) {
+            this.logMsg(
+                `StartTransaction rejected for tag ${tagId} on connector ${connectorId} due to existing reservation for another tag (reservation id ${reservation.reservationId})`
+            );
+            return false;
+        }
+
+        if (reservation) {
+            reservationId = reservation.reservationId;
+
+            // Remove the reservation, but do not release the connector because it is going straight to Charging.
+            this.removeReservation(reservationId);
+
+            this.logMsg(
+                `StartTransaction accepted for tag ${tagId} on connector ${connectorId} with matching reservation (reservation id ${reservationId})`
+            );
+        }
+
         this.setLastAction("startTransaction");
         this.setStatus(ocpp.CP_INTRANSACTION);
         var mv = this.meterValue();
         var id=generateId();
-        var strtT = JSON.stringify([2,id,"StartTransaction", {
+        var strtT = JSON.stringify([ocpp.CALL,id,"StartTransaction", {
             "connectorId": connectorId,
             "idTag": tagId,
             "timestamp": formatDate(new Date()),
             "meterStart": mv,
             "reservationId": reservationId
         }]);
-        this.logMsg("Starting Transaction for tag "+tagId+" (connector:"+connectorId+", meter value="+mv+")");
+        this.logMsg("Starting Transaction for tag "+tagId+" (connector:"+connectorId+", meter value="+mv+", reservationId="+reservationId+")");
         this.wsSendData(strtT);
         this.setConnectorStatus(connectorId,ocpp.CONN_CHARGING);
+        return true;
     }
 
     //
@@ -313,7 +686,7 @@ export default class ChargePoint {
     // @param transactionId the id of the transaction to stop
     // @param tagId the id of the RFID tag currently authorized on the CP
     //
-    stopTransactionWithId(transactionId,tagId="DEADBEEF"){
+    stopTransactionWithId(transactionId, tagId="DEADBEEF"){
         this.setLastAction("stopTransaction");
         this.setStatus(ocpp.CP_AUTHORIZED);
         var mv=this.meterValue();
@@ -326,7 +699,7 @@ export default class ChargePoint {
         if (!isEmpty(tagId)) {
             stopParams["idTag"]=tagId;
         }
-        var stpT = JSON.stringify([2, id, "StopTransaction",stopParams]);
+        var stpT = JSON.stringify([ocpp.CALL, id, "StopTransaction",stopParams]);
         this.wsSendData(stpT);
         this.setConnectorStatus(1,ocpp.CONN_AVAILABLE);
     }
@@ -367,7 +740,7 @@ export default class ChargePoint {
         this.logMsg('Sending BootNotification');
         this.setLastAction("BootNotification");
         var id=generateId();
-        var bn_req = JSON.stringify([2, id, "BootNotification", {
+        var bn_req = JSON.stringify([ocpp.CALL, id, "BootNotification", {
             "chargePointVendor": "Elmo",
             "chargePointModel": "Elmo-Virtual1",
             "chargePointSerialNumber": "elm.001.13.1",
@@ -400,7 +773,7 @@ export default class ChargePoint {
         if (this._heartbeat) {
             clearInterval(this._heartbeat);
         }
-        this._heartbeat = setInterval(this.sendHeartbeat,period*1000);
+        this._heartbeat = setInterval(() => this.sendHeartbeat(), period * 1000);
     }
 
     //
@@ -409,11 +782,20 @@ export default class ChargePoint {
     sendHeartbeat() {
         this.setLastAction("Heartbeat");
         var id=generateId();
-        var HB = JSON.stringify([2,id,"Heartbeat", {}]);
+        var HB = JSON.stringify([ocpp.CALL,id,"Heartbeat", {}]);
         this.logMsg('Heartbeat');
         this.wsSendData(HB);
     }
-    
+ 
+    //
+    // Stop the active heartbeat timer, if one exists.
+    //
+    clearHeartbeat() {
+        if (this._heartbeat) {
+            clearInterval(this._heartbeat);
+            this._heartbeat = null;
+        }
+    }
     //
     // Send data to the server (will be also logged in console)
     // @data the data to send 
@@ -447,7 +829,8 @@ export default class ChargePoint {
         } 
         else {
 
-            this._websocket = new WebSocket(wsurl + "" + cpid, ["ocpp1.6", "ocpp1.5"]);
+            // this._websocket = new WebSocket(wsurl + "" + cpid, ["ocpp1.6", "ocpp1.5"]);
+            this._websocket = new WebSocket(wsurl + "" + cpid);
             var self = this
 
             //
@@ -488,7 +871,7 @@ export default class ChargePoint {
                 // Decrypt Message Type
                 var msgType=ddata[0];
                 switch(msgType) {
-                    case 2: // CALL 
+                    case ocpp.CALL: // CALL 
                         var id=ddata[1];
                         var request=ddata[2];
                         var payload=null;
@@ -497,10 +880,10 @@ export default class ChargePoint {
                         }
                         self.handleCallRequest(id,request,payload);
                         break;
-                    case 3: // CALLRESULT 
+                    case ocpp.CALLRESULT: // CALLRESULT 
                         self.handleCallResult(ddata[2]);
                         break;
-                    case 4: // CALLERROR
+                    case ocpp.CALLERROR: // CALLERROR
                         self.handleCallError(ddata[2],ddata[3]);
                         break;
                 }
@@ -510,6 +893,7 @@ export default class ChargePoint {
             // OnClose Callback
             //   
             this._websocket.onclose = function(evt) {
+                self.clearHeartbeat();
                 if (evt.code == 3001) {
                     self.setStatus(ocpp.CP_DISCONNECTED);
                     self.logMsg('Connection closed');
@@ -527,6 +911,8 @@ export default class ChargePoint {
     // Close the websocket and set internal state accordingly
     //
     wsDisconnect() {
+        this.clearHeartbeat();
+
         if (this._websocket) {
             this._websocket.close(3001);
         }
@@ -561,7 +947,7 @@ export default class ChargePoint {
         var meter=getSessionKey(ocpp.KEY_METER_VALUE);
         var id=generateId();
         var ssid = getSessionKey('TransactionId');
-        mvreq = JSON.stringify([2, id, "MeterValues", {"connectorId": c, "transactionId": ssid, "meterValue": [{"timestamp": formatDate(new Date()), "sampledValue": [{"value": meter}]}]}]);
+        mvreq = JSON.stringify([ocpp.CALL, id, "MeterValues", {"connectorId": c, "transactionId": ssid, "meterValue": [{"timestamp": formatDate(new Date()), "sampledValue": [{"value": meter}]}]}]);
         this.logMsg("Send Meter Values: "+meter+" (connector " +c+")");
         this.wsSendData(mvreq);
     }
@@ -598,7 +984,7 @@ export default class ChargePoint {
         var st=this.connectorStatus(c);
         this.setLastAction("StatusNotification");
         var id=generateId();
-        var sn_req = JSON.stringify([2, id, "StatusNotification", {
+        var sn_req = JSON.stringify([ocpp.CALL, id, "StatusNotification", {
             "connectorId": c,
             "status": st,
             "errorCode": "NoError",
@@ -634,7 +1020,7 @@ export default class ChargePoint {
         if(newAvailability==ocpp.AVAILABITY_INOPERATIVE) {
             this.setConnectorStatus(c,ocpp.CONN_UNAVAILABLE,true);
         }
-        else if(newAvailability==ocpp.AVAILABITY_INOPERATIVE) {
+        else if(newAvailability==ocpp.AVAILABITY_OPERATIVE) {
             this.setConnectorStatus(c,ocpp.CONN_AVAILABLE,true);
         }
         if(this._availabilityChangeCb) {
