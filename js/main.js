@@ -271,11 +271,6 @@ function clearTimers() {
 //      6. Report Finishing status, then back to Available
 //
 function startAutoMeterValues() {
-    // Guard: Prevent duplicate meter timers
-    if (meterIntervalId) {
-        logMsg("[SIM] Auto MeterValues already running");
-        return;
-    }
 
     const intervalSeconds = parseInt($("#auto_meter_interval").val() || "10");
 
@@ -466,15 +461,17 @@ function statusChangeCb(s,msg) {
         case ocpp.CP_CONNECTED:
             $('#badge_connected').show();
             $('#disconnect').show();
+
+            automatedPreparing = false;
+            updateAutomatedButtonState();
                 
             if (simulationMode === "automated") {
                 setChargepointStatus("Preparing", true);
-                automatedPreparing = false;
-                updateAutomatedButtonState();
                 logMsg("[SIM] Connected. Waiting for reservation activation.");
             } else {
-                _cp.authorize($("#TAG").val());
+                logMsg("[SIM] Manual mode connected. Waiting for action.");
             }
+            
             break;
 
         case ocpp.CP_AUTHORIZED:
@@ -483,10 +480,8 @@ function statusChangeCb(s,msg) {
             automatedPreparing = false;
             updateAutomatedButtonState();
 
-
             if (simulationMode === "automated") {
-                setChargepointStatus("Preparing", true);
-                logMsg("[SIM] Connected and authorized. Waiting for activation.");
+                logMsg("[SIM] Authorization accepted. Starting transaction.");
             } else {
                 setChargepointStatus("Available", true);
             }
@@ -824,9 +819,9 @@ $( document ).ready(function() {
         _cp.wsDisconnect();
     });
     
-/*     $('#send').click(function () {
+    $('#send').click(function () {
         _cp.authorize($("#TAG").val());
-    }); */
+    }); 
 
     $('#start').click(function () {
         _cp.setMeterValue($("#metervalue").val(),false);

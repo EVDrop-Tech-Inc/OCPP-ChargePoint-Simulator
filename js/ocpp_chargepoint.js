@@ -108,6 +108,8 @@ export default class ChargePoint {
         this._statusChangeCb       = null;
         this._availabilityChangeCb = null;
         this._loggingCb            = null;
+
+        this._pendingRemoteStart = null;
     } 
 
     //
@@ -464,7 +466,21 @@ export default class ChargePoint {
                 ]);
 
                 this.wsSendData(response);
-                this.startTransaction(tagId, connectorId, reservation?.reservationId ?? 0);
+                // this.startTransaction(tagId, connectorId, reservation?.reservationId ?? 0);
+
+                // Save the remote start information while Authorize is pending
+                this._pendingRemoteStart = {
+                    tagId: tagId,
+                    connectorId: connectorId,
+                    reservationId: reservation?.reservationId ?? 0
+                };
+
+                this.logMsg(
+                    `RemoteStartTransaction accepted. Authorizing tag ${tagId}.`
+                );
+
+                // Send Authorize now that backend activation has occurred
+                this.authorize(tagId);
                 break;
 
             case "RemoteStopTransaction":
@@ -586,11 +602,25 @@ export default class ChargePoint {
         else if (la == "Authorize") {
             if (payload.idTagInfo.status == 'Invalid') {
                 this.logMsg('Authorization failed');
+                this._pendingRemoteStart = null;
+                return;
             }
-            else {
-                this.logMsg('Authorization OK');
-                this.setStatus(ocpp.CP_AUTHORIZED);
-            } 
+
+            this.logMsg('Authorization OK');
+            this.setStatus(ocpp.CP_AUTHORIZED);
+
+            if (this._pendingRemoteStart) {
+                const pending = this._pendingRemoteStart;
+                this._pendingRemoteStart = null;
+
+                setTimeout(() => {
+                    this.startTransaction(
+                        pending.tagId,
+                        pending.connectorId,
+                        pending.reservationId
+                    );
+                }, 5000);
+            }
         }
         else if (la == "startTransaction") {
             var transactionId = payload.transactionId;
@@ -688,7 +718,7 @@ export default class ChargePoint {
     //
     stopTransactionWithId(transactionId, tagId="DEADBEEF"){
         this.setLastAction("stopTransaction");
-        this.setStatus(ocpp.CP_AUTHORIZED);
+        this.setStatus(ocpp.CP_CONNECTED);
         var mv=this.meterValue();
         this.logMsg("Stopping Transaction with id "+transactionId+" (meterValue="+mv+")");
         var id=generateId();
