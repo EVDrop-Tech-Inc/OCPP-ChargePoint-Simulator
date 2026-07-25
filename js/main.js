@@ -466,15 +466,15 @@ function statusChangeCb(s,msg) {
         case ocpp.CP_CONNECTED:
             $('#badge_connected').show();
             $('#disconnect').show();
-            
-            // If automated mode, send Heartbeat every 30 seconds
+                
             if (simulationMode === "automated") {
-                _cp.setHeartbeat(30);
+                setChargepointStatus("Preparing", true);
+                automatedPreparing = false;
+                updateAutomatedButtonState();
+                logMsg("[SIM] Connected. Waiting for reservation activation.");
+            } else {
+                _cp.authorize($("#TAG").val());
             }
-
-            setChargepointStatus("Preparing", false);
-
-            _cp.authorize($("#TAG").val()); // Turns it Authorized
             break;
 
         case ocpp.CP_AUTHORIZED:
