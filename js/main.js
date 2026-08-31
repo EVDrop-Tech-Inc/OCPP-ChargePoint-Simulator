@@ -87,6 +87,9 @@ function keyDefaultValue(key) {
         case APIURL:
             v = "http://localhost:8000/api/v1";
             break;
+        case APIURL:
+            v = "http://localhost:8000/api/v1";
+            break;
     }
 
     return v;
