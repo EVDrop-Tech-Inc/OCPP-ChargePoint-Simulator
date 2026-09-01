@@ -65,22 +65,34 @@ function setKey(key,value) {
 
 // Gets the default values for simulator settings
 function keyDefaultValue(key) {
-    var v=""
+    const hosted = window.location.hostname === "api.evdrop.net";
+
+    var v = "";
+
     switch(key) {
         case WSURL:
-            v="ws://localhost:5001/ocpp-csms/chargepoint/";
+            v = hosted
+                ? "wss://api.evdrop.net/ocpp-csms/chargepoint/"
+                : "ws://localhost:5001/ocpp-csms/chargepoint/";
             break;
+
         case CPID:
-            v='CA_SIMULATED_CP_1';
+            v = "CA_SIMULATED_CP_1";
             break;
+
         case TAGID:
-            v='DEADBEEF';
+            v = "DEADBEEF";
+            break;
+
+        case APIURL:
+            v = "http://localhost:8000/api/v1";
             break;
         case APIURL:
             v = "http://localhost:8000/api/v1";
             break;
     }
-    return v
+
+    return v;
 }
 
 //
@@ -178,51 +190,59 @@ function saveMeterValue(value) {
     localStorage.setItem(METER_VALUE, value);
 }
 
-//
-// Update the chargepoint status in automated mode
-//
-// connectorId 0 is the overall chargepoint
-// Manual mode skips this because the user controls status updates manually
-//
-function setChargepointStatus(status, sendNotification = false) {
+// Connector 1 Status
+function setAutomatedConnectorStatus(status, sendNotification = false) {
+    // Ignore automated connector status updates if on Manual mode
     if (simulationMode !== "automated") {
-        return; 
+        return;
     }
 
+    // Update Connector 1 and reflect the new status in the simulator
+    _cp.setConnectorStatus(1, status, sendNotification);
     updateChargepointStatusBadge(status);
-    _cp.setConnectorStatus(0, status, sendNotification);
 }
 
 // Simulation Mode UI
 function applySimulationModeUi() {
     // Automated
     if (simulationMode === "automated") {
-        $('#start').hide();
-        $('#heartbeat').hide();
-        $('#data_transfer').hide();
+        $('#send').hide(); // Authorize Button
+        $('#start').hide(); // Start Transaction
+        $('#heartbeat').hide(); // Heartbeat button
+        $('#data_transfer').hide()
         $('#mv').hide();
         $('#mvplus').hide();
 
-        $('#status0').hide();
+        // Hide manual status controls
+        $('#status0').hide(); // Connector Availability (On/Off)
+        $('#status1').hide(); // Connector Status
+
         $('#STATUS_CON0').prop('disabled', true);
+        $('#STATUS_CON1').prop('disabled', true);
 
         $('#manual_chargepoint_status_controls').removeClass('d-flex').hide();
         $('#chargepoint_status_badge').show();
 
         $('#metervalue').prop('readonly', true);
 
+        // Refresh Automated mode transaction button state
         updateAutomatedButtonState();
         return;
     }
     // Manual
-    $('#start').show();
-    $('#heartbeat').show();
-    $('#data_transfer').show();
+    $('#send').hide(); // Authorize Button
+    $('#start').show(); // Start Transaction
+    $('#heartbeat').show(); // Heartbeat button
+    $('#data_transfer').hide();
     $('#mv').show();
     $('#mvplus').show();
 
-    $('#status0').show();
+    // Show manual status controls
+    $('#status0').show(); // Connector Availability (On/Off)
+    $('#status1').show(); // Connector Status
+
     $('#STATUS_CON0').prop('disabled', false);
+    $('#STATUS_CON1').prop('disabled', false);
 
     $('#manual_chargepoint_status_controls').show().addClass('d-flex');
     $('#chargepoint_status_badge').hide();
@@ -263,12 +283,12 @@ function clearTimers() {
 // -----------------------------------------------------------------------------
 //
 // Automated mode simulates a REALISTIC charging session:
-//      1. Connect, authorize, and report Preparing
-//      2. Wait for RemoteStartTransaction from backend
-//      3. Enter Charging when StartTransaction is accepted
+//      1. Connect, and report 'Preparing'
+//      2. Wait for ActivateReservation/RemoteStartTransaction from backend
+//      3. Enter 'Charging' when activated
 //      4. Send MeterValues repeatedly
 //      5. Stop automatically when the timer expires
-//      6. Report Finishing status, then back to Available
+//      6. Report 'Finishing' status, then back to 'Available'
 //
 function startAutoMeterValues() {
 
@@ -277,9 +297,12 @@ function startAutoMeterValues() {
     logMsg("[SIM] Auto MeterValues started");
     logMsg("[SIM] Meter interval: " + intervalSeconds + " seconds");
 
+    // Repeatedly increase/add to the simulated meter reading and send a MeterValues
+    // message to the OCPP server at the configured interval.
     meterIntervalId = setInterval(function() {
         let meter = parseInt($("#metervalue").val() || "0");
 
+        // Simulating energy usage
         meter = meter + 10;
 
         $("#metervalue").val(meter);
@@ -354,7 +377,7 @@ function stopAutomatedTransaction() {
     updateAutomatedButtonState();
 
     logMsg("[SIM] Finishing automated transaction");
-    setChargepointStatus("Finishing", true);
+    setAutomatedConnectorStatus("Finishing", true);
 
     // Delays the end of charging to demo Finishing status, before becoming Available again
     statusTransitionTimerId = setTimeout(function () {
@@ -366,7 +389,8 @@ function stopAutomatedTransaction() {
         automatedFinishing = false;
         transactionRunning = false;
 
-        setChargepointStatus("Available", true);
+        setAutomatedConnectorStatus("Available", true);
+
         updateAutomatedButtonState();
 
         logMsg("[SIM] Automated transaction stopped");
@@ -386,7 +410,7 @@ function updateAutomatedButtonState() {
         btn-secondary = gray
     */
 
-    // Manual mode always uses the normal Stop Transaction button
+    // Manual mode always uses the Stop Transaction button
     if (simulationMode !== "automated") {
         $('#stop').show();
         $('#stop').text("Stop Transaction");
@@ -426,8 +450,8 @@ function updateAutomatedButtonState() {
 //
 //      CP_DISCONNECTED  -> return to Setup Screen
 //      CP_CONNECTING    -> Preparing
-//      CP_CONNECTED     -> Authorize
-//      CP_AUTHORIZED    -> Available
+//      CP_CONNECTED     -> Waiting for backend activation
+//      CP_AUTHORIZED    -> Status before Charging
 //      CP_INTRANSACTION -> Charging
 //      CP_ERROR         -> Faulted
 //
@@ -454,8 +478,6 @@ function statusChangeCb(s,msg) {
             $('#badge_connecting').show();
             $('#disconnect').show(); 
 
-            setChargepointStatus("Preparing", false);
-
             break;
 
         case ocpp.CP_CONNECTED:
@@ -464,9 +486,15 @@ function statusChangeCb(s,msg) {
 
             automatedPreparing = false;
             updateAutomatedButtonState();
-                
+            
+            // If Automated mode:
+            //      - set connector status to Preparing
+            //      - wait for reservation activation
+            // If Manual:
+            //      - waiting for user interaction
             if (simulationMode === "automated") {
-                setChargepointStatus("Preparing", true);
+                setAutomatedConnectorStatus("Preparing", true);
+
                 logMsg("[SIM] Connected. Waiting for reservation activation.");
             } else {
                 logMsg("[SIM] Manual mode connected. Waiting for action.");
@@ -480,10 +508,11 @@ function statusChangeCb(s,msg) {
             automatedPreparing = false;
             updateAutomatedButtonState();
 
+            // When transaction is started, it is authorized
             if (simulationMode === "automated") {
                 logMsg("[SIM] Authorization accepted. Starting transaction.");
             } else {
-                setChargepointStatus("Available", true);
+                _cp.setConnectorStatus(1, "Available", true);
             }
 
             break;
@@ -492,24 +521,52 @@ function statusChangeCb(s,msg) {
             $('#badge_transaction').show();
 
             transactionRunning = true;
-            automatedPreparing = false;
             automatedFinishing = false;
 
-            setChargepointStatus("Charging", true);
+            // If Automated mode AND in-transaction:
+            //      - simulate a vehicle plug-in by sending connector Preparing status automatically
+            //      - shortly after, update connector status to Charging and start meter values + auto-stop timer
+            if (simulationMode === "automated"){
+                //
+                // Simulate vehicle plug-in
+                //
+                automatedPreparing = true;
+                updateAutomatedButtonState();
 
-            if (simulationMode === "automated") {
-                startAutoMeterValues();
-                startTransactionAutoStopTimer();
+                setAutomatedConnectorStatus("Preparing", true);
+
+                statusTransitionTimerId = setTimeout(function () {
+                    statusTransitionTimerId = null;
+
+                    automatedPreparing = false;
+
+                    // Connector status shows charging
+                    setAutomatedConnectorStatus("Charging", true);
+
+                    logMsg("[SIM] Connector 1 entered Charging");
+
+                    startAutoMeterValues();
+                    startTransactionAutoStopTimer();
+
+                    updateAutomatedButtonState();
+
+                }, PREPARING_DELAY);
+            } else {
+                // Manual mode controls connector status itself
+                automatedPreparing = false;
+                updateAutomatedButtonState();
             }
-
-            updateAutomatedButtonState();
 
             break;
 
         case ocpp.CP_ERROR:
             $('#badge_error').show();
 
-            setChargepointStatus("Faulted", true);
+            if (simulationMode === "automated") {
+                setAutomatedConnectorStatus("Faulted", true);
+            } else {
+                _cp.setConnectorStatus(1, "Faulted", true);
+            }
 
             if (!isEmpty(msg)) {
                 logMsg(msg)
@@ -520,7 +577,11 @@ function statusChangeCb(s,msg) {
         default:
             $('#badge_error').show();
 
-            setChargepointStatus("Faulted", true);
+            if (simulationMode === "automated") {
+                setAutomatedConnectorStatus("Faulted", true);
+            } else {
+                _cp.setConnectorStatus(1, "Faulted", true);
+            }
             
             if (!isEmpty(msg)) {
                 logMsg(msg)
@@ -601,30 +662,91 @@ async function validateChargepointPin(chargepointId, pin) {
     const apiUrl = getKey(APIURL).replace(/\/$/, '');
     const url = `${apiUrl}/validateChargepointPin`;
 
-    const response = await fetch(url, {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-            chargepoint_ocpp_id: chargepointId,
-            pin: pin
-        })
+    console.log("[PIN] Sending validation request", {
+        url,
+        chargepointId,
+        pinProvided: Boolean(pin)
+    });
+
+    let response;
+
+    try {
+        response = await fetch(url, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+                chargepoint_ocpp_id: chargepointId,
+                pin: pin
+            })
+        });
+    } catch (err) {
+        console.error("[PIN] Network request failed", {
+            url,
+            chargepointId,
+            errorName: err.name,
+            errorMessage: err.message,
+            browserOnline: navigator.onLine
+        });
+
+        const message = navigator.onLine
+            ? "Unable to connect to the Django API."
+            : "Browser is offline.";
+
+        logMsg(`[SIM] PIN validation failed: ${message}`);
+        logMsg(`[SIM] API URL: ${url}`);
+
+        throw new Error(message);
+    }
+
+    console.log("[PIN] Backend response received", {
+        status: response.status,
+        statusText: response.statusText,
+        ok: response.ok
     });
 
     const rawText = await response.text();
+
+    console.log("[PIN] Backend response body", rawText);
 
     let data = {};
 
     try {
         data = JSON.parse(rawText);
     } catch (err) {
+        console.error("[PIN] Backend returned invalid JSON", {
+            rawText,
+            errorName: err.name,
+            errorMessage: err.message
+        });
+
         throw new Error("Backend returned non-JSON response.");
     }
 
     if (!response.ok) {
-        throw new Error(data.message || data.detail || 'PIN validation failed.');
+        const message =
+            data.message ||
+            data.detail ||
+            "PIN validation failed.";
+
+        console.warn("[PIN] Validation rejected", {
+            status: response.status,
+            message,
+            data
+        });
+
+        // Preserve Django's real message:
+        // "PIN is required.", "Invalid PIN.", etc.
+        throw new Error(message);
     }
+
+    console.log("[PIN] Validation successful", {
+        chargepointId,
+        pinRequired: data.pin_required,
+        chargepointIdFromBackend: data.chargepoint_id
+    });
+
     return data;
 }
 
@@ -851,7 +973,7 @@ $( document ).ready(function() {
         _cp.setMeterValue($("#metervalue").val(), false);
         _cp.stopTransaction($("#TAG").val());
 
-        setChargepointStatus("Available", true);
+        _cp.setConnectorStatus(1, "Available", true);
     });
 
     $('#mv').click(function () {
@@ -879,6 +1001,7 @@ $( document ).ready(function() {
         _cp.sendHeartbeat();
     });
 
+    // Connector Status Handlers
     $('#CP0_STATUS').change(function () {
         _cp.setConnectorStatus(0,$("#STATUS_CON0").val(),false);
     });
