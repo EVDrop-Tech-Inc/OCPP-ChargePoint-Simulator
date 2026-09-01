@@ -85,10 +85,9 @@ function keyDefaultValue(key) {
             break;
 
         case APIURL:
-            v = "http://localhost:8000/api/v1";
-            break;
-        case APIURL:
-            v = "http://localhost:8000/api/v1";
+            v = hosted
+                ? "https://api.evdrop.net/api/v1"
+                : "http://localhost:8000/api/v1";
             break;
     }
 
